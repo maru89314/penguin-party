@@ -59,7 +59,8 @@ function canPlace(pyramid, row, col, color) {
   if (row === 0) return true; // 最下段は自由
   const below1 = pyramid[row - 1][col];
   const below2 = pyramid[row - 1][col + 1];
-  return (below1 && below1.color === color) || (below2 && below2.color === color);
+  if (!below1 || !below2) return false; // 下の2枚が両方ないと置けない
+  return below1.color === color || below2.color === color;
 }
 
 function getValidPlacements(pyramid, color) {
@@ -140,7 +141,7 @@ function broadcastState(room) {
   // 各プレイヤーに自分の手札だけ送る
   room.players.forEach((p, i) => {
     io.to(p.id).emit('gameState', {
-      ...baseState,
+      ...baseState
       myHand: room.hands ? room.hands[i] : [],
       myIndex: i,
     });
