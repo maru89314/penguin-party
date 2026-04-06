@@ -9,9 +9,13 @@ const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ヘルスチェック用エンドポイント
+app.get('/ping', (req, res) => res.send('pong'));
+
+// ─── ゲームデータ ───────────────────────────────────────────────
 const COLORS = ['red', 'yellow', 'green', 'blue', 'purple'];
-const COLOR_COUNTS = { red: 9, yellow: 8, green: 7, blue: 6, purple: 6 };
-const PYRAMID_ROWS = 8;
+const COLOR_COUNTS = { red: 9, yellow: 8, green: 7, blue: 6, purple: 6 }; // 合計36枚
+const PYRAMID_ROWS = 8; // 行8〜1 = 合計36マス
 
 const rooms = {};
 
@@ -26,7 +30,7 @@ function createDeck() {
   const deck = [];
   for (const color of COLORS) {
     for (let i = 0; i < COLOR_COUNTS[color]; i++) {
-      deck.push({ color, id: color + '-' + i });
+      deck.push({ color, id: `${color}-${i}` });
     }
   }
   return deck;
@@ -41,6 +45,7 @@ function shuffle(arr) {
   return a;
 }
 
+// ピラミッド: pyramid[row][col]  row=0が一番下(8マス)、row=7がトップ(1マス)
 function createPyramid() {
   const p = [];
   for (let r = 0; r < PYRAMID_ROWS; r++) {
@@ -51,7 +56,7 @@ function createPyramid() {
 
 function canPlace(pyramid, row, col, color) {
   if (pyramid[row][col] !== null) return false;
-  if (row === 0) return true;
+  if (row === 0) return true; // 最下段は自由
   const below1 = pyramid[row - 1][col];
   const below2 = pyramid[row - 1][col + 1];
   return (below1 && below1.color === color) || (below2 && below2.color === color);
@@ -100,6 +105,17 @@ function startRound(room) {
   room.roundPenalties = new Array(room.players.length).fill(0);
   room.currentPlayerIndex = room.round % room.players.length;
   room.phase = 'playing';
+  room.selectedCardIndex = null;
+}
+
+function nextActivePlayer(room) {
+  const n = room.players.length;
+  let idx = (room.currentPlayerIndex + 1) % n;
+  for (let i = 0; i < n; i++) {
+    if (!room.eliminated[idx]) return idx;
+    idx = (idx + 1) % n;
+  }
+  return -1; // 全員終了
 }
 
 function broadcastState(room) {
@@ -120,6 +136,8 @@ function broadcastState(room) {
     totalRounds: room.totalRounds,
     hostId: room.hostId,
   };
+
+  // 各プレイヤーに自分の手札だけ送る
   room.players.forEach((p, i) => {
     io.to(p.id).emit('gameState', {
       ...baseState,
@@ -129,41 +147,61 @@ function broadcastState(room) {
   });
 }
 
+// ─── Socket.io ─────────────────────────────────────────────────
 io.on('connection', (socket) => {
+  console.log('接続:', socket.id);
+
+  // ルーム作成
   socket.on('createRoom', ({ name }) => {
     let code;
     do { code = generateCode(); } while (rooms[code]);
+
     rooms[code] = {
-      code, hostId: socket.id,
+      code,
+      hostId: socket.id,
       players: [{ id: socket.id, name }],
-      scores: [0], hands: [], pyramid: createPyramid(),
-      eliminated: [], roundPenalties: [],
-      currentPlayerIndex: 0, phase: 'waiting', round: 0, totalRounds: 1,
+      scores: [0],
+      hands: [],
+      pyramid: createPyramid(),
+      eliminated: [],
+      roundPenalties: [],
+      currentPlayerIndex: 0,
+      phase: 'waiting',
+      round: 0,
+      totalRounds: 1,
     };
+
     socket.join(code);
     socket.roomCode = code;
     socket.emit('roomCreated', { code, players: rooms[code].players.map(p => p.name) });
+    console.log(`ルーム作成: ${code} by ${name}`);
   });
 
+  // ルーム参加
   socket.on('joinRoom', ({ code, name }) => {
     const room = rooms[code];
     if (!room) return socket.emit('error', 'ルームが見つかりません');
     if (room.phase !== 'waiting') return socket.emit('error', 'ゲームはすでに始まっています');
     if (room.players.length >= 5) return socket.emit('error', 'ルームが満員です（最大5人）');
+
     room.players.push({ id: socket.id, name });
     room.scores.push(0);
     socket.join(code);
     socket.roomCode = code;
+
     io.to(code).emit('playerJoined', { players: room.players.map(p => p.name) });
     socket.emit('roomJoined', { code, players: room.players.map(p => p.name) });
+    console.log(`${name} が ${code} に参加`);
   });
 
+  // ゲーム開始
   socket.on('startGame', () => {
     const code = socket.roomCode;
     const room = rooms[code];
     if (!room) return;
     if (room.hostId !== socket.id) return socket.emit('error', 'ホストのみ開始できます');
     if (room.players.length < 2) return socket.emit('error', '2人以上必要です');
+
     room.totalRounds = room.players.length;
     room.round = 0;
     room.scores = new Array(room.players.length).fill(0);
@@ -171,68 +209,129 @@ io.on('connection', (socket) => {
     broadcastState(room);
   });
 
+  // カードを出す
   socket.on('playCard', ({ cardIndex, row, col }) => {
     const code = socket.roomCode;
     const room = rooms[code];
     if (!room || room.phase !== 'playing') return;
+
     const myIndex = room.players.findIndex(p => p.id === socket.id);
     if (myIndex !== room.currentPlayerIndex) return socket.emit('error', 'あなたのターンではありません');
+
     const hand = room.hands[myIndex];
     const card = hand[cardIndex];
     if (!card) return socket.emit('error', '無効なカードです');
-    if (!canPlace(room.pyramid, row, col, card.color)) return socket.emit('error', 'そこには置けません');
+
+    if (!canPlace(room.pyramid, row, col, card.color)) {
+      return socket.emit('error', 'そこには置けません');
+    }
+
+    // カードを置く
     room.pyramid[row][col] = card;
     hand.splice(cardIndex, 1);
-    if (hand.length === 0) room.eliminated[myIndex] = true;
+
+    // 手札が0→このプレイヤーはラウンドクリア
+    if (hand.length === 0) {
+      room.eliminated[myIndex] = true;
+    }
+
+    // ピラミッド完成 or 全員終了チェック
     const allDone = room.eliminated.every(e => e) || isPyramidFull(room.pyramid);
-    if (allDone) { endRound(room); return; }
+    if (allDone) {
+      endRound(room);
+      return;
+    }
+
+    // 次のプレイヤーへ（置けない人はスキップ+ペナルティ）
     advanceTurn(room);
     broadcastState(room);
   });
 
+  // 切断
   socket.on('disconnect', () => {
     const code = socket.roomCode;
     if (!code || !rooms[code]) return;
     const room = rooms[code];
     const idx = room.players.findIndex(p => p.id === socket.id);
     if (idx === -1) return;
+
     const name = room.players[idx].name;
     room.players.splice(idx, 1);
     room.scores.splice(idx, 1);
-    if (room.players.length === 0) { delete rooms[code]; }
-    else {
+
+    if (room.players.length === 0) {
+      delete rooms[code];
+    } else {
       if (room.hostId === socket.id) room.hostId = room.players[0].id;
       io.to(code).emit('playerLeft', { name, players: room.players.map(p => p.name) });
     }
+    console.log(`${name} が切断`);
   });
 });
 
 function advanceTurn(room) {
   let tries = 0;
   const n = room.players.length;
+
   while (tries < n) {
     const next = (room.currentPlayerIndex + 1) % n;
     room.currentPlayerIndex = next;
     tries++;
+
     if (room.eliminated[next]) continue;
-    if (hasAnyValidMove(room.pyramid, room.hands[next])) return;
-    room.roundPenalties[next] = room.hands[next].length;
+
+    // 置けるカードがあるか確認
+    if (hasAnyValidMove(room.pyramid, room.hands[next])) return; // OK
+
+    // 置けない → ペナルティ
+    const penalty = room.hands[next].length;
+    room.roundPenalties[next] = penalty;
     room.eliminated[next] = true;
-    if (room.eliminated.every(e => e) || isPyramidFull(room.pyramid)) { endRound(room); return; }
+
+    // 全員終了チェック
+    if (room.eliminated.every(e => e) || isPyramidFull(room.pyramid)) {
+      endRound(room);
+      return;
+    }
   }
+
+  // 全員終了
   endRound(room);
 }
 
 function endRound(room) {
+  // ペナルティ集計（手札が残っている人）
   room.players.forEach((_, i) => {
     const remaining = (room.hands[i] || []).length;
-    if (remaining > 0) room.roundPenalties[i] = remaining;
+    if (remaining > 0) {
+      room.roundPenalties[i] = remaining;
+    }
     room.scores[i] += room.roundPenalties[i];
   });
+
   room.round++;
-  room.phase = room.round >= room.totalRounds ? 'gameEnd' : 'roundEnd';
+  if (room.round >= room.totalRounds) {
+    room.phase = 'gameEnd';
+  } else {
+    room.phase = 'roundEnd';
+  }
+
   broadcastState(room);
 }
 
+// ─── サーバー起動 ───────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { console.log('ペンギンパーティ起動: http://localhost:' + PORT); });
+server.listen(PORT, () => {
+  console.log(`🐧 ペンギンパーティサーバー起動中: http://localhost:${PORT}`);
+
+  // Render無料プランのスリープ防止：14分おきに自分にpingを送る
+  const https = require('https');
+  const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://penguin-party.onrender.com';
+  setInterval(() => {
+    https.get(`${SELF_URL}/ping`, (res) => {
+      console.log(`💓 Keep-alive ping: ${res.statusCode}`);
+    }).on('error', (e) => {
+      console.log(`⚠️ Keep-alive error: ${e.message}`);
+    });
+  }, 14 * 60 * 1000); // 14分
+});
