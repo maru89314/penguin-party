@@ -1,0 +1,238 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+const COLORS = ['red', 'yellow', 'green', 'blue', 'purple'];
+const COLOR_COUNTS = { red: 9, yellow: 8, green: 7, blue: 6, purple: 6 };
+const PYRAMID_ROWS = 8;
+
+const rooms = {};
+
+function generateCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ2345679';
+  let c = '';
+  for (let i = 0; i < 4; i++) c += chars[Math.floor(Math.random() * chars.length)];
+  return c;
+}
+
+function createDeck() {
+  const deck = [];
+  for (const color of COLORS) {
+    for (let i = 0; i < COLOR_COUNTS[color]; i++) {
+      deck.push({ color, id: color + '-' + i });
+    }
+  }
+  return deck;
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function createPyramid() {
+  const p = [];
+  for (let r = 0; r < PYRAMID_ROWS; r++) {
+    p.push(new Array(PYRAMID_ROWS - r).fill(null));
+  }
+  return p;
+}
+
+function canPlace(pyramid, row, col, color) {
+  if (pyramid[row][col] !== null) return false;
+  if (row === 0) return true;
+  const below1 = pyramid[row - 1][col];
+  const below2 = pyramid[row - 1][col + 1];
+  return (below1 && below1.color === color) || (below2 && below2.color === color);
+}
+
+function getValidPlacements(pyramid, color) {
+  const placements = [];
+  for (let r = 0; r < PYRAMID_ROWS; r++) {
+    for (let c = 0; c < PYRAMID_ROWS - r; c++) {
+      if (canPlace(pyramid, r, c, color)) placements.push({ row: r, col: c });
+    }
+  }
+  return placements;
+}
+
+function hasAnyValidMove(pyramid, hand) {
+  for (const card of hand) {
+    if (getValidPlacements(pyramid, card.color).length > 0) return true;
+  }
+  return false;
+}
+
+function isPyramidFull(pyramid) {
+  for (let r = 0; r < PYRAMID_ROWS; r++) {
+    for (let c = 0; c < PYRAMID_ROWS - r; c++) {
+      if (pyramid[r][c] === null) return false;
+    }
+  }
+  return true;
+}
+
+function dealCards(deck, numPlayers) {
+  const hands = Array.from({ length: numPlayers }, () => []);
+  for (let i = 0; i < deck.length; i++) {
+    hands[i % numPlayers].push(deck[i]);
+  }
+  return hands;
+}
+
+function startRound(room) {
+  const deck = shuffle(createDeck());
+  const hands = dealCards(deck, room.players.length);
+  room.pyramid = createPyramid();
+  room.hands = hands;
+  room.eliminated = new Array(room.players.length).fill(false);
+  room.roundPenalties = new Array(room.players.length).fill(0);
+  room.currentPlayerIndex = room.round % room.players.length;
+  room.phase = 'playing';
+}
+
+function broadcastState(room) {
+  const baseState = {
+    code: room.code,
+    phase: room.phase,
+    pyramid: room.pyramid,
+    players: room.players.map((p, i) => ({
+      name: p.name,
+      handCount: (room.hands[i] || []).length,
+      score: room.scores[i],
+      roundPenalty: room.roundPenalties ? room.roundPenalties[i] : 0,
+      eliminated: room.eliminated ? room.eliminated[i] : false,
+      isCurrentPlayer: i === room.currentPlayerIndex,
+    })),
+    currentPlayerIndex: room.currentPlayerIndex,
+    round: room.round,
+    totalRounds: room.totalRounds,
+    hostId: room.hostId,
+  };
+  room.players.forEach((p, i) => {
+    io.to(p.id).emit('gameState', {
+      ...baseState,
+      myHand: room.hands ? room.hands[i] : [],
+      myIndex: i,
+    });
+  });
+}
+
+io.on('connection', (socket) => {
+  socket.on('createRoom', ({ name }) => {
+    let code;
+    do { code = generateCode(); } while (rooms[code]);
+    rooms[code] = {
+      code, hostId: socket.id,
+      players: [{ id: socket.id, name }],
+      scores: [0], hands: [], pyramid: createPyramid(),
+      eliminated: [], roundPenalties: [],
+      currentPlayerIndex: 0, phase: 'waiting', round: 0, totalRounds: 1,
+    };
+    socket.join(code);
+    socket.roomCode = code;
+    socket.emit('roomCreated', { code, players: rooms[code].players.map(p => p.name) });
+  });
+
+  socket.on('joinRoom', ({ code, name }) => {
+    const room = rooms[code];
+    if (!room) return socket.emit('error', 'ルームが見つかりません');
+    if (room.phase !== 'waiting') return socket.emit('error', 'ゲームはすでに始まっています');
+    if (room.players.length >= 5) return socket.emit('error', 'ルームが満員です（最大5人）');
+    room.players.push({ id: socket.id, name });
+    room.scores.push(0);
+    socket.join(code);
+    socket.roomCode = code;
+    io.to(code).emit('playerJoined', { players: room.players.map(p => p.name) });
+    socket.emit('roomJoined', { code, players: room.players.map(p => p.name) });
+  });
+
+  socket.on('startGame', () => {
+    const code = socket.roomCode;
+    const room = rooms[code];
+    if (!room) return;
+    if (room.hostId !== socket.id) return socket.emit('error', 'ホストのみ開始できます');
+    if (room.players.length < 2) return socket.emit('error', '2人以上必要です');
+    room.totalRounds = room.players.length;
+    room.round = 0;
+    room.scores = new Array(room.players.length).fill(0);
+    startRound(room);
+    broadcastState(room);
+  });
+
+  socket.on('playCard', ({ cardIndex, row, col }) => {
+    const code = socket.roomCode;
+    const room = rooms[code];
+    if (!room || room.phase !== 'playing') return;
+    const myIndex = room.players.findIndex(p => p.id === socket.id);
+    if (myIndex !== room.currentPlayerIndex) return socket.emit('error', 'あなたのターンではありません');
+    const hand = room.hands[myIndex];
+    const card = hand[cardIndex];
+    if (!card) return socket.emit('error', '無効なカードです');
+    if (!canPlace(room.pyramid, row, col, card.color)) return socket.emit('error', 'そこには置けません');
+    room.pyramid[row][col] = card;
+    hand.splice(cardIndex, 1);
+    if (hand.length === 0) room.eliminated[myIndex] = true;
+    const allDone = room.eliminated.every(e => e) || isPyramidFull(room.pyramid);
+    if (allDone) { endRound(room); return; }
+    advanceTurn(room);
+    broadcastState(room);
+  });
+
+  socket.on('disconnect', () => {
+    const code = socket.roomCode;
+    if (!code || !rooms[code]) return;
+    const room = rooms[code];
+    const idx = room.players.findIndex(p => p.id === socket.id);
+    if (idx === -1) return;
+    const name = room.players[idx].name;
+    room.players.splice(idx, 1);
+    room.scores.splice(idx, 1);
+    if (room.players.length === 0) { delete rooms[code]; }
+    else {
+      if (room.hostId === socket.id) room.hostId = room.players[0].id;
+      io.to(code).emit('playerLeft', { name, players: room.players.map(p => p.name) });
+    }
+  });
+});
+
+function advanceTurn(room) {
+  let tries = 0;
+  const n = room.players.length;
+  while (tries < n) {
+    const next = (room.currentPlayerIndex + 1) % n;
+    room.currentPlayerIndex = next;
+    tries++;
+    if (room.eliminated[next]) continue;
+    if (hasAnyValidMove(room.pyramid, room.hands[next])) return;
+    room.roundPenalties[next] = room.hands[next].length;
+    room.eliminated[next] = true;
+    if (room.eliminated.every(e => e) || isPyramidFull(room.pyramid)) { endRound(room); return; }
+  }
+  endRound(room);
+}
+
+function endRound(room) {
+  room.players.forEach((_, i) => {
+    const remaining = (room.hands[i] || []).length;
+    if (remaining > 0) room.roundPenalties[i] = remaining;
+    room.scores[i] += room.roundPenalties[i];
+  });
+  room.round++;
+  room.phase = room.round >= room.totalRounds ? 'gameEnd' : 'roundEnd';
+  broadcastState(room);
+}
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => { console.log('ペンギンパーティ起動: http://localhost:' + PORT); });
