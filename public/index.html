@@ -482,7 +482,8 @@ function canPlaceClient(pyramid, row, col, color) {
   if (row === 0) return true;
   const below1 = pyramid[row - 1][col];
   const below2 = pyramid[row - 1][col + 1];
-  return (below1 && below1.color === color) || (below2 && below2.color === color);
+  if (!below1 || !below2) return false; // 下の2枚が両方ないと置けない
+  return below1.color === color || below2.color === color;
 }
 
 // ─── ラウンド終了 ─────────────────────────────
