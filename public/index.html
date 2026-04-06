@@ -130,14 +130,14 @@
     50% { box-shadow: 0 0 0 6px #27ae6000; }
   }
   .cell.filled { cursor: default; }
-  .cell-inner { font-size: 1.5rem; }
+  .cell-inner { display: none; }
 
   /* カラー定義 */
-  .color-red    { background: linear-gradient(135deg, #ff7675, #d63031); }
-  .color-yellow { background: linear-gradient(135deg, #ffeaa7, #fdcb6e); }
-  .color-green  { background: linear-gradient(135deg, #55efc4, #00b894); }
-  .color-blue   { background: linear-gradient(135deg, #74b9ff, #0984e3); }
-  .color-purple { background: linear-gradient(135deg, #a29bfe, #6c5ce7); }
+  .color-red    { background-image: url('/images/card-red.png');    background-size: cover; background-position: center; }
+  .color-yellow { background-image: url('/images/card-yellow.png'); background-size: cover; background-position: center; }
+  .color-green  { background-image: url('/images/card-green.png');  background-size: cover; background-position: center; }
+  .color-blue   { background-image: url('/images/card-blue.png');   background-size: cover; background-position: center; }
+  .color-purple { background-image: url('/images/card-purple.png'); background-size: cover; background-position: center; }
 
   /* 手札 */
   .hand-section {
@@ -148,7 +148,7 @@
   .hand-cards { display: flex; gap: 8px; flex-wrap: wrap; }
   .hand-card {
     width: 52px; height: 64px; border-radius: 12px; border: 3px solid transparent;
-    display: flex; align-items: center; justify-content: center; font-size: 1.6rem;
+    display: flex; align-items: center; justify-content: center; font-size: 0;
     cursor: pointer; transition: transform .15s, box-shadow .15s, border-color .15s;
     position: relative;
   }
