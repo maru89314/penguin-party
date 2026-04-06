@@ -98,6 +98,14 @@
   .score-chip.active { background: #ffeaa7; border-color: #fdcb6e; color: #6c5c00; }
   .score-chip.eliminated { opacity: .45; text-decoration: line-through; }
 
+  /* 表向きカード（5人用） */
+  .revealed-card-bar {
+    width: 100%; max-width: 900px;
+    background: #fff8e1cc; border-radius: 12px; padding: 8px 16px;
+    display: flex; align-items: center; gap: 12px; border: 2px solid #fdcb6e;
+  }
+  .revealed-card-label { font-size: .85rem; color: #6c5c00; font-weight: 700; }
+
   /* ピラミッド */
   .pyramid-wrapper {
     overflow-x: auto; width: 100%; display: flex; justify-content: center;
@@ -177,7 +185,7 @@
   }
   .result-box {
     background: #ffffffcc; border-radius: 20px; padding: 32px 40px;
-    box-shadow: 0 8px 32px #0002; text-align: center; width: min(420px,100%);
+    box-shadow: 0 8px 32px #0002; text-align: center; width: min(460px,100%);
   }
   .result-box h2 { font-size: 1.4rem; color: #1a5276; margin-bottom: 16px; }
   .score-row {
@@ -233,7 +241,7 @@
   <button id="start-btn" class="btn btn-green" onclick="startGame()" style="display:none;width:min(360px,90%)">
     🎮 ゲーム開始！
   </button>
-  <div class="info-text">2〜5人でプレイできます</div>
+  <div class="info-text">2〜6人でプレイできます</div>
 </div>
 
 <!-- ゲーム画面 -->
@@ -242,7 +250,11 @@
     <div class="round-info" id="round-info">ラウンド 1 / 1</div>
     <div class="score-chips" id="score-chips"></div>
   </div>
-  <div class="turn-banner" id="turn-banner">読み込み仭...</div>
+  <div id="revealed-card-bar" class="revealed-card-bar" style="display:none">
+    <span class="revealed-card-label">🃏 場のカード（5人用・表向き）</span>
+    <div id="revealed-card-display"></div>
+  </div>
+  <div class="turn-banner" id="turn-banner">読み込み中...</div>
   <div class="pyramid-wrapper">
     <div class="pyramid" id="pyramid"></div>
   </div>
@@ -268,11 +280,9 @@
 const socket = io();
 let myIndex = -1;
 let selectedCardIndex = null;
-let validTargets = []; // [{row, col}]
 let currentState = null;
 let isHost = false;
 
-// ─── カラー絵文字マッピング ───────────────────
 const COLOR_EMOJI = {
   red:    '🔴',
   yellow: '🟡',
@@ -281,8 +291,10 @@ const COLOR_EMOJI = {
   purple: '🟣',
 };
 const COLOR_NAMES = {
-  red: '赤', yellow: '黄', green: '緑', blue: '青', purple: '紫'
+  red: '赤（いちご）', yellow: '黄（レモン）', green: '緑（キウイ）',
+  blue: '青（ブルーベリー）', purple: '紫（ぶどう）',
 };
+const RANK_ICONS = ['🏆', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣'];
 
 // ─── ロビー操作 ──────────────────────────────
 function getName() {
@@ -375,14 +387,24 @@ function renderGame(state) {
   document.getElementById('round-info').textContent =
     `ラウンド ${state.round + 1} / ${state.totalRounds}`;
 
-  // スコアチップ
+  // スコアチップ（シャチカウンター表示）
   const chips = document.getElementById('score-chips');
   chips.innerHTML = state.players.map((p, i) => {
     let cls = 'score-chip';
     if (i === state.currentPlayerIndex) cls += ' active';
     if (p.eliminated) cls += ' eliminated';
-    return `<span class="${cls}">${escHtml(p.name)}: ${p.score}点 (手札${p.handCount}枚)</span>`;
+    return `<span class="${cls}">${escHtml(p.name)}: 🦈×${p.score} (手札${p.handCount}枚)</span>`;
   }).join('');
+
+  // 表向きカード（5人用）
+  const revBar = document.getElementById('revealed-card-bar');
+  const revDisplay = document.getElementById('revealed-card-display');
+  if (state.revealedCard) {
+    revBar.style.display = 'flex';
+    revDisplay.innerHTML = `<div class="hand-card color-${state.revealedCard.color}" style="cursor:default;pointer-events:none" title="${COLOR_NAMES[state.revealedCard.color]}"></div>`;
+  } else {
+    revBar.style.display = 'none';
+  }
 
   // ターンバナー
   const banner = document.getElementById('turn-banner');
@@ -407,7 +429,7 @@ function renderPyramid(pyramid, myHand, isMyTurn) {
   const el = document.getElementById('pyramid');
   el.innerHTML = '';
 
-  // validTargets を計算（選択済みカードがあれば）
+  // 選択済みカードに対して置ける場所を計算
   let targets = [];
   if (isMyTurn && selectedCardIndex !== null && myHand[selectedCardIndex]) {
     const color = myHand[selectedCardIndex].color;
@@ -438,14 +460,14 @@ function renderPyramid(pyramid, myHand, isMyTurn) {
       }
       rowEl.appendChild(cell);
     }
-    el.insertBefore(rowEl, el.firstChild); // 上の行が視覚的に上
+    el.insertBefore(rowEl, el.firstChild);
   }
 }
 
 function renderHand(hand, isMyTurn) {
   const el = document.getElementById('hand-cards');
   if (!hand || hand.length === 0) {
-    el.innerHTML = '<span style="color:#aaa;font-size:.9rem">手札なし（クリア！）</span>';
+    el.innerHTML = '<span style="color:#aaa;font-size:.9rem">手札なし（クリア！🎉）</span>';
     return;
   }
   el.innerHTML = '';
@@ -454,7 +476,6 @@ function renderHand(hand, isMyTurn) {
     div.className = `hand-card color-${card.color}`;
     if (!isMyTurn) div.classList.add('disabled');
     if (i === selectedCardIndex) div.classList.add('selected');
-    div.innerHTML = COLOR_EMOJI[card.color];
     div.title = COLOR_NAMES[card.color];
     div.onclick = () => isMyTurn && selectCard(i);
     el.appendChild(div);
@@ -462,11 +483,7 @@ function renderHand(hand, isMyTurn) {
 }
 
 function selectCard(index) {
-  if (selectedCardIndex === index) {
-    selectedCardIndex = null;
-  } else {
-    selectedCardIndex = index;
-  }
+  selectedCardIndex = selectedCardIndex === index ? null : index;
   renderGame(currentState);
 }
 
@@ -479,10 +496,17 @@ function placeCard(row, col) {
 // クライアント側の置けるか判定（UI用）
 function canPlaceClient(pyramid, row, col, color) {
   if (pyramid[row][col] !== null) return false;
-  if (row === 0) return true;
+  if (row === 0) {
+    // 最下段: 任意の色OK、ただし最初以外は既存カードの隣のみ
+    const hasAnyCard = pyramid[0].some(c => c !== null);
+    if (!hasAnyCard) return true;
+    const left  = col > 0                     ? pyramid[0][col - 1] : null;
+    const right = col < pyramid[0].length - 1 ? pyramid[0][col + 1] : null;
+    return left !== null || right !== null;
+  }
   const below1 = pyramid[row - 1][col];
   const below2 = pyramid[row - 1][col + 1];
-  if (!below1 || !below2) return false; // 下の2枚が両方ないと置けない
+  if (!below1 || !below2) return false;
   return below1.color === color || below2.color === color;
 }
 
@@ -493,19 +517,33 @@ function showRoundEnd(state) {
     `ラウンド ${state.round} 終了！`;
 
   const sorted = [...state.players.map((p, i) => ({...p, i}))]
-    .sort((a,b) => a.score - b.score);
+    .sort((a, b) => a.score - b.score);
+
+  const rows = sorted.map((p, rank) => {
+    let changeStr = '';
+    let changeColor = '#888';
+    if (p.roundPenalty > 0) {
+      changeStr = `+${p.roundPenalty}枚`;
+      changeColor = '#e74c3c';
+    } else if (p.roundPenalty < 0) {
+      changeStr = `${Math.abs(p.roundPenalty)}枚返却`;
+      changeColor = '#27ae60';
+    } else {
+      changeStr = '±0';
+    }
+    return `<div class="score-row${rank === 0 ? ' winner' : ''}">
+      <span>${RANK_ICONS[rank] || ''} ${escHtml(p.name)}</span>
+      <span>🦈×${p.score} <small style="color:${changeColor}">(${changeStr})</small></span>
+    </div>`;
+  }).join('');
 
   document.getElementById('result-scores').innerHTML =
-    `<p style="color:#888;font-size:.85rem;margin-bottom:12px">ペナルティ（手札が残った枚数）の合計が少ない人が勝ち！</p>` +
-    sorted.map((p, rank) =>
-      `<div class="score-row${rank===0?' winner':''}">
-        <span>${rank===0 ? '🏆' : ['🥈','🥉','4️⃣','5️⃣'][rank-1]||'  '} ${escHtml(p.name)}</span>
-        <span>${p.score}点</span>
-      </div>`
-    ).join('') +
+    `<p style="color:#888;font-size:.85rem;margin-bottom:12px">
+      🦈 シャチカウンターが少ない人が勝ち！<br>
+      <small>全出し→2枚まで返却、残った→枚数分もらう</small>
+    </p>` + rows +
     `<br><p style="color:#888;font-size:.85rem">ホストが次のラウンドを始めます...</p>`;
 
-  // ホストなら「次のラウンド」ボタンゐ表示
   const btn = document.querySelector('#result .btn-primary');
   if (isHost) {
     btn.textContent = '▶️ 次のラウンドへ';
@@ -516,22 +554,27 @@ function showRoundEnd(state) {
   }
 }
 
+// ─── ゲーム終了 ──────────────────────────────
 function showGameEnd(state) {
   showScreen('result');
   document.getElementById('result-title').textContent = '🎉 ゲーム終了！';
 
   const sorted = [...state.players.map((p, i) => ({...p, i}))]
-    .sort((a,b) => a.score - b.score);
+    .sort((a, b) => a.score - b.score);
   const winner = sorted[0];
 
+  const rows = sorted.map((p, rank) =>
+    `<div class="score-row${rank === 0 ? ' winner' : ''}">
+      <span>${RANK_ICONS[rank] || ''} ${escHtml(p.name)}</span>
+      <span>🦈×${p.score}</span>
+    </div>`
+  ).join('');
+
   document.getElementById('result-scores').innerHTML =
-    `<p style="font-size:1.1rem;margin-bottom:16px">🏆 勝者: <strong>${escHtml(winner.name)}</strong>さる！</p>` +
-    sorted.map((p, rank) =>
-      `<div class="score-row${rank===0?' winner':''}">
-        <span>${rank===0 ? '🏆' : ['🥈','🥉','4️⃣','5️⃣'][rank-1]||''} ${escHtml(p.name)}</span>
-        <span>${p.score}点</span>
-      </div>`
-    ).join('');
+    `<p style="font-size:1.1rem;margin-bottom:8px">
+      🏆 勝者: <strong>${escHtml(winner.name)}</strong>さん！
+    </p>
+    <p style="color:#888;font-size:.85rem;margin-bottom:16px">シャチカウンター最少！</p>` + rows;
 
   document.querySelector('#result .btn-primary').textContent = '🔄 もう一度プレイ';
   document.querySelector('#result .btn-primary').onclick = () => location.reload();

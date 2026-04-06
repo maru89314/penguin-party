@@ -14,8 +14,9 @@ app.get('/ping', (req, res) => res.send('pong'));
 
 // ─── ゲームデータ ───────────────────────────────────────────────
 const COLORS = ['red', 'yellow', 'green', 'blue', 'purple'];
-const COLOR_COUNTS = { red: 9, yellow: 8, green: 7, blue: 6, purple: 6 }; // 合計36枚
-const PYRAMID_ROWS = 8; // 行8〜1 = 合計36マス
+// 緑8枚、他は各色7枚 = 合計36枚
+const COLOR_COUNTS = { red: 7, yellow: 7, green: 8, blue: 7, purple: 7 };
+const PYRAMID_ROWS = 8; // 最下段8マス → 合計36マス
 
 const rooms = {};
 
@@ -56,10 +57,18 @@ function createPyramid() {
 
 function canPlace(pyramid, row, col, color) {
   if (pyramid[row][col] !== null) return false;
-  if (row === 0) return true; // 最下段は自由
+  if (row === 0) {
+    // 最下段: 任意の色OK。ただし最初のカード以外は既存カードの隣のみ
+    const hasAnyCard = pyramid[0].some(c => c !== null);
+    if (!hasAnyCard) return true; // 最初のカードはどこでもOK
+    const left  = col > 0                     ? pyramid[0][col - 1] : null;
+    const right = col < pyramid[0].length - 1 ? pyramid[0][col + 1] : null;
+    return left !== null || right !== null;
+  }
+  // 2段目以上: 下の2枚が両方揃い、かつどちらかと同色
   const below1 = pyramid[row - 1][col];
   const below2 = pyramid[row - 1][col + 1];
-  if (!below1 || !below2) return false; // 下の2枚が両方ないと置けない
+  if (!below1 || !below2) return false;
   return below1.color === color || below2.color === color;
 }
 
@@ -90,33 +99,30 @@ function isPyramidFull(pyramid) {
 }
 
 function dealCards(deck, numPlayers) {
-  const hands = Array.from({ length: numPlayers }, () => []);
-  for (let i = 0; i < deck.length; i++) {
-    hands[i % numPlayers].push(deck[i]);
+  let revealedCard = null;
+  let dealDeck = deck;
+  // 5人の場合: 36枚 ÷ 5 = 7枚ずつ、1枚余り → 表向きに場に出す
+  if (numPlayers === 5) {
+    revealedCard = deck[deck.length - 1];
+    dealDeck = deck.slice(0, deck.length - 1);
   }
-  return hands;
+  const hands = Array.from({ length: numPlayers }, () => []);
+  for (let i = 0; i < dealDeck.length; i++) {
+    hands[i % numPlayers].push(dealDeck[i]);
+  }
+  return { hands, revealedCard };
 }
 
 function startRound(room) {
   const deck = shuffle(createDeck());
-  const hands = dealCards(deck, room.players.length);
+  const { hands, revealedCard } = dealCards(deck, room.players.length);
   room.pyramid = createPyramid();
   room.hands = hands;
+  room.revealedCard = revealedCard;
   room.eliminated = new Array(room.players.length).fill(false);
   room.roundPenalties = new Array(room.players.length).fill(0);
   room.currentPlayerIndex = room.round % room.players.length;
   room.phase = 'playing';
-  room.selectedCardIndex = null;
-}
-
-function nextActivePlayer(room) {
-  const n = room.players.length;
-  let idx = (room.currentPlayerIndex + 1) % n;
-  for (let i = 0; i < n; i++) {
-    if (!room.eliminated[idx]) return idx;
-    idx = (idx + 1) % n;
-  }
-  return -1; // 全員終了
 }
 
 function broadcastState(room) {
@@ -124,10 +130,11 @@ function broadcastState(room) {
     code: room.code,
     phase: room.phase,
     pyramid: room.pyramid,
+    revealedCard: room.revealedCard || null,
     players: room.players.map((p, i) => ({
       name: p.name,
       handCount: (room.hands[i] || []).length,
-      score: room.scores[i],
+      score: room.scores[i],          // シャチカウンター合計
       roundPenalty: room.roundPenalties ? room.roundPenalties[i] : 0,
       eliminated: room.eliminated ? room.eliminated[i] : false,
       isCurrentPlayer: i === room.currentPlayerIndex,
@@ -164,6 +171,7 @@ io.on('connection', (socket) => {
       scores: [0],
       hands: [],
       pyramid: createPyramid(),
+      revealedCard: null,
       eliminated: [],
       roundPenalties: [],
       currentPlayerIndex: 0,
@@ -183,7 +191,7 @@ io.on('connection', (socket) => {
     const room = rooms[code];
     if (!room) return socket.emit('error', 'ルームが見つかりません');
     if (room.phase !== 'waiting') return socket.emit('error', 'ゲームはすでに始まっています');
-    if (room.players.length >= 5) return socket.emit('error', 'ルームが満員です（最大5人）');
+    if (room.players.length >= 6) return socket.emit('error', 'ルームが満員です（最大6人）');
 
     room.players.push({ id: socket.id, name });
     room.scores.push(0);
@@ -195,17 +203,25 @@ io.on('connection', (socket) => {
     console.log(`${name} が ${code} に参加`);
   });
 
-  // ゲーム開始
+  // ゲーム開始 / 次のラウンド
   socket.on('startGame', () => {
     const code = socket.roomCode;
     const room = rooms[code];
     if (!room) return;
     if (room.hostId !== socket.id) return socket.emit('error', 'ホストのみ開始できます');
-    if (room.players.length < 2) return socket.emit('error', '2人以上必要です');
 
-    room.totalRounds = room.players.length;
-    room.round = 0;
-    room.scores = new Array(room.players.length).fill(0);
+    if (room.phase === 'waiting') {
+      // 初回ゲーム開始
+      if (room.players.length < 2) return socket.emit('error', '2人以上必要です');
+      room.totalRounds = room.players.length;
+      room.round = 0;
+      room.scores = new Array(room.players.length).fill(0);
+    } else if (room.phase === 'roundEnd') {
+      // 次のラウンドへ（スコアはリセットしない）
+    } else {
+      return; // playing / gameEnd 中は無視
+    }
+
     startRound(room);
     broadcastState(room);
   });
@@ -231,19 +247,17 @@ io.on('connection', (socket) => {
     room.pyramid[row][col] = card;
     hand.splice(cardIndex, 1);
 
-    // 手札が0→このプレイヤーはラウンドクリア
+    // 手札が0 → このプレイヤーはラウンド終了
     if (hand.length === 0) {
       room.eliminated[myIndex] = true;
     }
 
-    // ピラミッド完成 or 全員終了チェック
-    const allDone = room.eliminated.every(e => e) || isPyramidFull(room.pyramid);
-    if (allDone) {
+    // 全員終了 or ピラミッド完成チェック
+    if (room.eliminated.every(e => e) || isPyramidFull(room.pyramid)) {
       endRound(room);
       return;
     }
 
-    // 次のプレイヤーへ（置けない人はスキップ+ペナルティ）
     advanceTurn(room);
     broadcastState(room);
   });
@@ -271,8 +285,8 @@ io.on('connection', (socket) => {
 });
 
 function advanceTurn(room) {
-  let tries = 0;
   const n = room.players.length;
+  let tries = 0;
 
   while (tries < n) {
     const next = (room.currentPlayerIndex + 1) % n;
@@ -281,33 +295,35 @@ function advanceTurn(room) {
 
     if (room.eliminated[next]) continue;
 
-    // 置けるカードがあるか確認
-    if (hasAnyValidMove(room.pyramid, room.hands[next])) return; // OK
+    // 置けるカードがあればそのプレイヤーのターン
+    if (hasAnyValidMove(room.pyramid, room.hands[next])) return;
 
-    // 置けない → ペナルティ
-    const penalty = room.hands[next].length;
-    room.roundPenalties[next] = penalty;
+    // 置けない → このプレイヤーは終了（手札が余った分はendRoundで集計）
     room.eliminated[next] = true;
 
-    // 全員終了チェック
     if (room.eliminated.every(e => e) || isPyramidFull(room.pyramid)) {
       endRound(room);
       return;
     }
   }
 
-  // 全員終了
   endRound(room);
 }
 
 function endRound(room) {
-  // ペナルティ集計（手札が残っている人）
+  // シャチカウンター集計
   room.players.forEach((_, i) => {
     const remaining = (room.hands[i] || []).length;
-    if (remaining > 0) {
+    if (remaining === 0) {
+      // 全出し成功 → 既存のシャチカウンターを最大2枚返却
+      const returnAmt = Math.min(2, room.scores[i]);
+      room.scores[i] -= returnAmt;
+      room.roundPenalties[i] = -returnAmt; // 表示用（マイナスは返却）
+    } else {
+      // 残り枚数分シャチカウンターを取る
       room.roundPenalties[i] = remaining;
+      room.scores[i] += remaining;
     }
-    room.scores[i] += room.roundPenalties[i];
   });
 
   room.round++;
@@ -334,5 +350,5 @@ server.listen(PORT, () => {
     }).on('error', (e) => {
       console.log(`⚠️ Keep-alive error: ${e.message}`);
     });
-  }, 14 * 60 * 1000); // 14分
+  }, 14 * 60 * 1000);
 });
