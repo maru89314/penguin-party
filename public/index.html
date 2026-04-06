@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🐧 ペンギンパーティ オンライン</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+    background: linear-gradient(135deg, #a8edea 0%, #c5d8f5 50%, #fed6e3 100%);
+    min-height: 100vh;
+    color: #333;
+  }
+
+  /* ─── ロビー ─────────────────────────── */
+  #lobby {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 100vh; gap: 16px;
+    padding: 20px;
+  }
+  .logo { font-size: 72px; animation: bounce 1.5s infinite; }
+  @keyframes bounce {
+    0%,100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  h1 { font-size: 2rem; color: #1a5276; text-shadow: 1px 2px 0 #aed6f1; }
+  .card-box {
+    background: #ffffffcc; border-radius: 20px; padding: 28px 32px;
+    box-shadow: 0 8px 32px #0002; width: min(380px, 100%);
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .card-box h2 { font-size: 1.1rem; color: #1a5276; margin-bottom: 4px; }
+  input[type=text] {
+    width: 100%; padding: 10px 14px; border-radius: 10px;
+    border: 2px solid #aed6f1; font-size: 1rem; outline: none;
+    transition: border-color .2s;
+  }
+  input[type=text]:focus { border-color: #5dade2; }
+  .btn {
+    padding: 11px 18px; border: none; border-radius: 12px; font-size: 1rem;
+    font-weight: 700; cursor: pointer; transition: transform .1s, box-shadow .1s;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: #2e86c1; color: #fff; box-shadow: 0 4px 12px #2e86c144; }
+  .btn-primary:hover { background: #1a5276; }
+  .btn-secondary { background: #f9ebea; color: #c0392b; }
+  .btn-secondary:hover { background: #f1948a; color: #fff; }
+  .btn-green { background: #27ae60; color: #fff; }
+  .btn-green:hover { background: #1e8449; }
+  .divider { text-align: center; color: #aaa; font-size: .9rem; }
+  #msg-lobby { color: #c0392b; font-size: .9rem; min-height: 1.2em; }
+
+  /* ─── 待合室 ─────────────────────────── */
+  #waiting {
+    display: none; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 100vh; gap: 16px; padding: 20px;
+  }
+  .room-code-box {
+    background: #ffffffcc; border-radius: 20px; padding: 24px 36px;
+    box-shadow: 0 8px 32px #0002; text-align: center;
+  }
+  .room-code {
+    font-size: 3rem; font-weight: 900; letter-spacing: .3em;
+    color: #1a5276; text-shadow: 2px 3px 0 #aed6f1;
+    font-family: 'Courier New', monospace;
+  }
+  .room-code-label { font-size: .85rem; color: #888; margin-bottom: 6px; }
+  .player-list {
+    background: #ffffffcc; border-radius: 16px; padding: 16px 24px;
+    box-shadow: 0 4px 16px #0001; width: min(360px, 100%);
+  }
+  .player-list h3 { font-size: 1rem; color: #1a5276; margin-bottom: 10px; }
+  .player-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; border-bottom: 1px solid #f0f4f8; font-size: .95rem;
+  }
+  .player-item:last-child { border-bottom: none; }
+
+  /* ─── ゲーム画面 ─────────────────────── */
+  #game {
+    display: none; flex-direction: column; align-items: center;
+    padding: 16px 8px; gap: 12px; min-height: 100vh;
+  }
+  .top-bar {
+    width: 100%; max-width: 900px; display: flex; justify-content: space-between;
+    align-items: center; background: #ffffffbb; border-radius: 14px;
+    padding: 8px 16px; flex-wrap: wrap; gap: 8px;
+  }
+  .round-info { font-size: .9rem; color: #555; font-weight: 600; }
+  .score-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .score-chip {
+    padding: 4px 10px; border-radius: 20px; font-size: .8rem; font-weight: 700;
+    background: #eaf4fb; color: #1a5276; border: 2px solid #aed6f1;
+    transition: all .3s;
+  }
+  .score-chip.active { background: #ffeaa7; border-color: #fdcb6e; color: #6c5c00; }
+  .score-chip.eliminated { opacity: .45; text-decoration: line-through; }
+
+  /* ピラミッド */
+  .pyramid-wrapper {
+    overflow-x: auto; width: 100%; display: flex; justify-content: center;
+  }
+  .pyramid {
+    display: flex; flex-direction: column-reverse; align-items: center;
+    gap: 4px; padding: 12px 0;
+  }
+  .pyramid-row { display: flex; gap: 4px; }
+  .cell {
+    width: 44px; height: 52px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem; border: 2px solid transparent;
+    transition: transform .15s, box-shadow .15s;
+    cursor: default; position: relative;
+  }
+  .cell.empty {
+    background: #ffffff55; border: 2px dashed #ccc;
+  }
+  .cell.valid-target {
+    background: #ffffffcc; border: 2px dashed #27ae60;
+    cursor: pointer; animation: pulse 1s infinite;
+  }
+  .cell.valid-target:hover {
+    transform: scale(1.12); box-shadow: 0 4px 12px #27ae6044;
+    background: #d5f5e3;
+  }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 #27ae6033; }
+    50% { box-shadow: 0 0 0 6px #27ae6000; }
+  }
+  .cell.filled { cursor: default; }
+  .cell-inner { font-size: 1.5rem; }
+
+  /* カラー定義 */
+  .color-red    { background: linear-gradient(135deg, #ff7675, #d63031); }
+  .color-yellow { background: linear-gradient(135deg, #ffeaa7, #fdcb6e); }
+  .color-green  { background: linear-gradient(135deg, #55efc4, #00b894); }
+  .color-blue   { background: linear-gradient(135deg, #74b9ff, #0984e3); }
+  .color-purple { background: linear-gradient(135deg, #a29bfe, #6c5ce7); }
+
+  /* 手札 */
+  .hand-section {
+    width: 100%; max-width: 900px;
+    background: #ffffffbb; border-radius: 16px; padding: 12px 16px;
+  }
+  .hand-label { font-size: .85rem; color: #888; margin-bottom: 8px; }
+  .hand-cards { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hand-card {
+    width: 52px; height: 64px; border-radius: 12px; border: 3px solid transparent;
+    display: flex; align-items: center; justify-content: center; font-size: 1.6rem;
+    cursor: pointer; transition: transform .15s, box-shadow .15s, border-color .15s;
+    position: relative;
+  }
+  .hand-card:hover { transform: translateY(-6px); box-shadow: 0 8px 20px #0003; }
+  .hand-card.selected {
+    border-color: #fdcb6e; transform: translateY(-10px);
+    box-shadow: 0 10px 24px #fdcb6e66;
+  }
+  .hand-card.disabled { opacity: .35; cursor: default; pointer-events: none; }
+
+  /* メッセージ */
+  .turn-banner {
+    background: #ffeaa7; border-radius: 12px; padding: 8px 20px;
+    font-weight: 700; font-size: 1rem; color: #6c5c00;
+    box-shadow: 0 2px 8px #fdcb6e44;
+    max-width: 900px; width: 100%; text-align: center;
+  }
+  .turn-banner.waiting-turn {
+    background: #dfe6e9; color: #636e72;
+  }
+
+  /* 結果 */
+  #result {
+    display: none; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 100vh; gap: 16px; padding: 20px;
+  }
+  .result-box {
+    background: #ffffffcc; border-radius: 20px; padding: 32px 40px;
+    box-shadow: 0 8px 32px #0002; text-align: center; width: min(420px,100%);
+  }
+  .result-box h2 { font-size: 1.4rem; color: #1a5276; margin-bottom: 16px; }
+  .score-row {
+    display: flex; justify-content: space-between; padding: 8px 0;
+    border-bottom: 1px solid #eee; font-size: 1rem;
+  }
+  .score-row:last-child { border-bottom: none; }
+  .score-row.winner { font-weight: 800; color: #e67e22; font-size: 1.1rem; }
+  .trophy { font-size: 1.4rem; }
+  .info-text { color: #888; font-size: .85rem; }
+  #msg-game { color: #c0392b; font-size: .88rem; min-height: 1.2em; text-align: center; }
+
+  @media (max-width: 480px) {
+    .cell { width: 36px; height: 44px; font-size: 1.1rem; }
+    .hand-card { width: 44px; height: 54px; font-size: 1.3rem; }
+    h1 { font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ロビー -->
+<div id="lobby">
+  <div class="logo">🐧</div>
+  <h1>ペンギンパーティ</h1>
+  <div class="card-box">
+    <h2>名前を入力してください</h2>
+    <input type="text" id="name-input" placeholder="あなたの名前" maxlength="12">
+
+    <div class="divider">— 新しいゲーム —</div>
+    <button class="btn btn-primary" onclick="createRoom()">🏠 ルームを作る</button>
+
+    <div class="divider">— 参加する —</div>
+    <input type="text" id="code-input" placeholder="ルームコード (例: AB3K)" maxlength="4" style="text-transform:uppercase">
+    <button class="btn btn-secondary" onclick="joinRoom()">🚪 参加する</button>
+    <div id="msg-lobby"></div>
+  </div>
+</div>
+
+<!-- 待合室 -->
+<div id="waiting">
+  <div class="logo">🐧</div>
+  <h1>待合室</h1>
+  <div class="room-code-box">
+    <div class="room-code-label">ルームコードをシェアしよう！</div>
+    <div class="room-code" id="display-code">----</div>
+    <div class="info-text" style="margin-top:6px">このコードを友達に教えてね 📲</div>
+  </div>
+  <div class="player-list">
+    <h3>👥 参加者</h3>
+    <div id="waiting-players"></div>
+  </div>
+  <button id="start-btn" class="btn btn-green" onclick="startGame()" style="display:none;width:min(360px,90%)">
+    🎮 ゲーム開始！
+  </button>
+  <div class="info-text">2〜5人でプレイできます</div>
+</div>
+
+<!-- ゲーム画面 -->
+<div id="game">
+  <div class="top-bar">
+    <div class="round-info" id="round-info">ラウンド 1 / 1</div>
+    <div class="score-chips" id="score-chips"></div>
+  </div>
+  <div class="turn-banner" id="turn-banner">読み込み仭...</div>
+  <div class="pyramid-wrapper">
+    <div class="pyramid" id="pyramid"></div>
+  </div>
+  <div id="msg-game"></div>
+  <div class="hand-section" id="hand-section">
+    <div class="hand-label">🃏 あなたの手札</div>
+    <div class="hand-cards" id="hand-cards"></div>
+  </div>
+</div>
+
+<!-- 結果 -->
+<div id="result">
+  <div class="logo">🐧🎉</div>
+  <div class="result-box">
+    <h2 id="result-title">ゲーム終了！</h2>
+    <div id="result-scores"></div>
+    <br>
+    <button class="btn btn-primary" onclick="location.reload()">🔄 もう一度プレイ</button>
+  </div>
+</div>
+
+<script>
+const socket = io();
+let myIndex = -1;
+let selectedCardIndex = null;
+let validTargets = []; // [{row, col}]
+let currentState = null;
+let isHost = false;
+
+// ─── カラー絵文字マッピング ───────────────────
+const COLOR_EMOJI = {
+  red:    '🔴',
+  yellow: '🟡',
+  green:  '🟢',
+  blue:   '🔵',
+  purple: '🟣',
+};
+const COLOR_NAMES = {
+  red: '赤', yellow: '黄', green: '緑', blue: '青', purple: '紫'
+};
+
+// ─── ロビー操作 ──────────────────────────────
+function getName() {
+  const n = document.getElementById('name-input').value.trim();
+  if (!n) { showLobbyMsg('名前を入力してください'); return null; }
+  return n;
+}
+function showLobbyMsg(msg) {
+  document.getElementById('msg-lobby').textContent = msg;
+}
+
+function createRoom() {
+  const name = getName(); if (!name) return;
+  socket.emit('createRoom', { name });
+}
+
+function joinRoom() {
+  const name = getName(); if (!name) return;
+  const code = document.getElementById('code-input').value.trim().toUpperCase();
+  if (code.length !== 4) { showLobbyMsg('4文字のコードを入力してください'); return; }
+  socket.emit('joinRoom', { code, name });
+}
+
+function startGame() {
+  socket.emit('startGame');
+}
+
+function showScreen(id) {
+  ['lobby','waiting','game','result'].forEach(s => {
+    document.getElementById(s).style.display = s === id ? 'flex' : 'none';
+  });
+}
+
+// ─── Socket イベント ─────────────────────────
+socket.on('roomCreated', ({ code, players }) => {
+  isHost = true;
+  document.getElementById('display-code').textContent = code;
+  renderWaitingPlayers(players);
+  document.getElementById('start-btn').style.display = 'block';
+  showScreen('waiting');
+});
+
+socket.on('roomJoined', ({ code, players }) => {
+  isHost = false;
+  document.getElementById('display-code').textContent = code;
+  renderWaitingPlayers(players);
+  showScreen('waiting');
+});
+
+socket.on('playerJoined', ({ players }) => {
+  renderWaitingPlayers(players);
+  if (isHost) document.getElementById('start-btn').style.display = 'block';
+});
+
+socket.on('playerLeft', ({ name, players }) => {
+  renderWaitingPlayers(players);
+});
+
+socket.on('gameState', (state) => {
+  currentState = state;
+  myIndex = state.myIndex;
+
+  if (state.phase === 'playing') {
+    showScreen('game');
+    renderGame(state);
+  } else if (state.phase === 'roundEnd') {
+    showRoundEnd(state);
+  } else if (state.phase === 'gameEnd') {
+    showGameEnd(state);
+  }
+});
+
+socket.on('error', (msg) => {
+  document.getElementById('msg-game').textContent = '⚠️ ' + msg;
+  setTimeout(() => document.getElementById('msg-game').textContent = '', 2500);
+  document.getElementById('msg-lobby').textContent = '⚠️ ' + msg;
+});
+
+// ─── 待合室 ──────────────────────────────────
+function renderWaitingPlayers(players) {
+  const el = document.getElementById('waiting-players');
+  el.innerHTML = players.map((p, i) =>
+    `<div class="player-item"><span>${i === 0 ? '👑' : '🐧'}</span><span>${escHtml(p)}</span>${i === 0 ? ' <small style="color:#aaa">（ホスト）</small>' : ''}</div>`
+  ).join('');
+}
+
+// ─── ゲーム描画 ──────────────────────────────
+function renderGame(state) {
+  // ラウンド情報
+  document.getElementById('round-info').textContent =
+    `ラウンド ${state.round + 1} / ${state.totalRounds}`;
+
+  // スコアチップ
+  const chips = document.getElementById('score-chips');
+  chips.innerHTML = state.players.map((p, i) => {
+    let cls = 'score-chip';
+    if (i === state.currentPlayerIndex) cls += ' active';
+    if (p.eliminated) cls += ' eliminated';
+    return `<span class="${cls}">${escHtml(p.name)}: ${p.score}点 (手札${p.handCount}枚)</span>`;
+  }).join('');
+
+  // ターンバナー
+  const banner = document.getElementById('turn-banner');
+  const curPlayer = state.players[state.currentPlayerIndex];
+  const isMyTurn = state.currentPlayerIndex === myIndex;
+  if (isMyTurn) {
+    banner.textContent = '✨ あなたのターンです！カードを選んで置く場所をタップ';
+    banner.className = 'turn-banner';
+  } else {
+    banner.textContent = `⌛ ${escHtml(curPlayer.name)} のターン...`;
+    banner.className = 'turn-banner waiting-turn';
+  }
+
+  // ピラミッド
+  renderPyramid(state.pyramid, state.myHand, isMyTurn);
+
+  // 手札
+  renderHand(state.myHand, isMyTurn);
+}
+
+function renderPyramid(pyramid, myHand, isMyTurn) {
+  const el = document.getElementById('pyramid');
+  el.innerHTML = '';
+
+  // validTargets を計算（選択済みカードがあれば）
+  let targets = [];
+  if (isMyTurn && selectedCardIndex !== null && myHand[selectedCardIndex]) {
+    const color = myHand[selectedCardIndex].color;
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8 - r; c++) {
+        if (canPlaceClient(pyramid, r, c, color)) targets.push(`${r}-${c}`);
+      }
+    }
+  }
+
+  for (let r = 0; r < 8; r++) {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'pyramid-row';
+    for (let c = 0; c < 8 - r; c++) {
+      const cell = document.createElement('div');
+      const card = pyramid[r][c];
+      if (card) {
+        cell.className = `cell filled color-${card.color}`;
+        cell.innerHTML = `<span class="cell-inner">${COLOR_EMOJI[card.color]}</span>`;
+        cell.title = COLOR_NAMES[card.color];
+      } else if (targets.includes(`${r}-${c}`)) {
+        cell.className = 'cell valid-target';
+        cell.innerHTML = `<span style="font-size:.9rem;color:#27ae60">▼</span>`;
+        cell.title = 'ここに置く';
+        cell.onclick = () => placeCard(r, c);
+      } else {
+        cell.className = 'cell empty';
+      }
+      rowEl.appendChild(cell);
+    }
+    el.insertBefore(rowEl, el.firstChild); // 上の行が視覚的に上
+  }
+}
+
+function renderHand(hand, isMyTurn) {
+  const el = document.getElementById('hand-cards');
+  if (!hand || hand.length === 0) {
+    el.innerHTML = '<span style="color:#aaa;font-size:.9rem">手札なし（クリア！）</span>';
+    return;
+  }
+  el.innerHTML = '';
+  hand.forEach((card, i) => {
+    const div = document.createElement('div');
+    div.className = `hand-card color-${card.color}`;
+    if (!isMyTurn) div.classList.add('disabled');
+    if (i === selectedCardIndex) div.classList.add('selected');
+    div.innerHTML = COLOR_EMOJI[card.color];
+    div.title = COLOR_NAMES[card.color];
+    div.onclick = () => isMyTurn && selectCard(i);
+    el.appendChild(div);
+  });
+}
+
+function selectCard(index) {
+  if (selectedCardIndex === index) {
+    selectedCardIndex = null;
+  } else {
+    selectedCardIndex = index;
+  }
+  renderGame(currentState);
+}
+
+function placeCard(row, col) {
+  if (selectedCardIndex === null) return;
+  socket.emit('playCard', { cardIndex: selectedCardIndex, row, col });
+  selectedCardIndex = null;
+}
+
+// クライアント側の置けるか判定（UI用）
+function canPlaceClient(pyramid, row, col, color) {
+  if (pyramid[row][col] !== null) return false;
+  if (row === 0) return true;
+  const below1 = pyramid[row - 1][col];
+  const below2 = pyramid[row - 1][col + 1];
+  return (below1 && below1.color === color) || (below2 && below2.color === color);
+}
+
+// ─── ラウンド終了 ─────────────────────────────
+function showRoundEnd(state) {
+  showScreen('result');
+  document.getElementById('result-title').textContent =
+    `ラウンド ${state.round} 終了！`;
+
+  const sorted = [...state.players.map((p, i) => ({...p, i}))]
+    .sort((a,b) => a.score - b.score);
+
+  document.getElementById('result-scores').innerHTML =
+    `<p style="color:#888;font-size:.85rem;margin-bottom:12px">ペナルティ（手札が残った枚数）の合計が少ない人が勝ち！</p>` +
+    sorted.map((p, rank) =>
+      `<div class="score-row${rank===0?' winner':''}">
+        <span>${rank===0 ? '🏆' : ['🥈','🥉','4️⃣','5️⃣'][rank-1]||'  '} ${escHtml(p.name)}</span>
+        <span>${p.score}点</span>
+      </div>`
+    ).join('') +
+    `<br><p style="color:#888;font-size:.85rem">ホストが次のラウンドを始めます...</p>`;
+
+  // ホストなら「次のラウンド」ボタンゐ表示
+  const btn = document.querySelector('#result .btn-primary');
+  if (isHost) {
+    btn.textContent = '▶️ 次のラウンドへ';
+    btn.onclick = () => socket.emit('startGame');
+    btn.style.display = 'block';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+function showGameEnd(state) {
+  showScreen('result');
+  document.getElementById('result-title').textContent = '🎉 ゲーム終了！';
+
+  const sorted = [...state.players.map((p, i) => ({...p, i}))]
+    .sort((a,b) => a.score - b.score);
+  const winner = sorted[0];
+
+  document.getElementById('result-scores').innerHTML =
+    `<p style="font-size:1.1rem;margin-bottom:16px">🏆 勝者: <strong>${escHtml(winner.name)}</strong>さる！</p>` +
+    sorted.map((p, rank) =>
+      `<div class="score-row${rank===0?' winner':''}">
+        <span>${rank===0 ? '🏆' : ['🥈','🥉','4️⃣','5️⃣'][rank-1]||''} ${escHtml(p.name)}</span>
+        <span>${p.score}点</span>
+      </div>`
+    ).join('');
+
+  document.querySelector('#result .btn-primary').textContent = '🔄 もう一度プレイ';
+  document.querySelector('#result .btn-primary').onclick = () => location.reload();
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Enterキー対応
+document.getElementById('code-input').addEventListener('input', function() {
+  this.value = this.value.toUpperCase();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const screen = document.querySelector('[style*="flex"]')?.id;
+    if (screen === 'lobby') {
+      const code = document.getElementById('code-input').value.trim();
+      code ? joinRoom() : createRoom();
+    }
+  }
+});
+</script>
+</body>
+</html>
