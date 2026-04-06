@@ -141,7 +141,7 @@ function broadcastState(room) {
   // 各プレイヤーに自分の手札だけ送る
   room.players.forEach((p, i) => {
     io.to(p.id).emit('gameState', {
-      ...baseState
+      ...baseState,
       myHand: room.hands ? room.hands[i] : [],
       myIndex: i,
     });
