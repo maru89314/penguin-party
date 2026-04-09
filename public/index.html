@@ -236,7 +236,7 @@
     <button class="btn btn-primary" onclick="createRoom()">🏠 ルームを作る</button>
 
     <div class="divider">— 参加する —</div>
-    <input type="text" id="code-input" placeholder="ルームコード (例: AB3K)" maxlength="4" style="text-transform:uppercase">
+    <input type="text" id="code-input" placeholder="ルームコード (例: 1234)" maxlength="4" inputmode="numeric">
     <button class="btn btn-secondary" onclick="joinRoom()">🚪 参加する</button>
     <div id="msg-lobby"></div>
   </div>
@@ -329,8 +329,8 @@ function createRoom() {
 
 function joinRoom() {
   const name = getName(); if (!name) return;
-  const code = document.getElementById('code-input').value.trim().toUpperCase();
-  if (code.length !== 4) { showLobbyMsg('4文字のコードを入力してください'); return; }
+  const code = document.getElementById('code-input').value.trim();
+  if (!/^\d{4}$/.test(code)) { showLobbyMsg('4桁の数字を入力してください'); return; }
   myName = name;
   socket.emit('joinRoom', { code, name });
 }
@@ -478,7 +478,7 @@ function renderPyramid(pyramid, myHand, isMyTurn) {
       const card = pyramid[r][c];
       if (card) {
         cell.className = `cell filled color-${card.color}`;
-        cell.innerHTML = `<span class="cell-inner">${COLOR_EMOJI[card.color]}</span>`;
+        cell.innerHTML = `<img src="/images/card-${card.color}.png" style="width:40px;height:48px;object-fit:contain;border-radius:8px;">`;
         cell.title = COLOR_NAMES[card.color];
       } else if (targets.includes(`${r}-${c}`)) {
         cell.className = 'cell valid-target';
@@ -506,7 +506,7 @@ function renderHand(hand, isMyTurn) {
     div.className = `hand-card color-${card.color}`;
     if (!isMyTurn) div.classList.add('disabled');
     if (i === selectedCardIndex) div.classList.add('selected');
-    div.innerHTML = COLOR_EMOJI[card.color];
+    div.innerHTML = `<img src="/images/card-${card.color}.png" style="width:46px;height:58px;object-fit:contain;border-radius:10px;">`;
     div.title = COLOR_NAMES[card.color];
     div.onclick = () => isMyTurn && selectCard(i);
     el.appendChild(div);
@@ -531,10 +531,23 @@ function placeCard(row, col) {
 // クライアント側の置けるか判定（UI用）
 function canPlaceClient(pyramid, row, col, color) {
   if (pyramid[row][col] !== null) return false;
-  if (row === 0) return true;
+  if (row === 0) {
+    const rowLen = pyramid[0].length; // 8
+    const hasAny = pyramid[0].some(c => c !== null);
+    if (!hasAny) {
+      // 最初の1枚: 両端のどちらか
+      return col === 0 || col === rowLen - 1;
+    }
+    // 2枚目以降: 隣に既存カードがある場所のみ（隙間なし）
+    const leftAdj = col > 0 && pyramid[0][col - 1] !== null;
+    const rightAdj = col < rowLen - 1 && pyramid[0][col + 1] !== null;
+    return leftAdj || rightAdj;
+  }
   const below1 = pyramid[row - 1][col];
   const below2 = pyramid[row - 1][col + 1];
-  return (below1 && below1.color === color) || (below2 && below2.color === color);
+  // 下の2枚が両方埋まっていて、かつ少なくとも1枚が同じ色
+  if (!below1 || !below2) return false;
+  return below1.color === color || below2.color === color;
 }
 
 // ─── ラウンド終了 ─────────────────────────────
@@ -594,7 +607,7 @@ function escHtml(str) {
 
 // Enterキー対応
 document.getElementById('code-input').addEventListener('input', function() {
-  this.value = this.value.toUpperCase();
+  this.value = this.value.replace(/\D/g, '');
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {

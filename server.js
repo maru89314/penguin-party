@@ -20,9 +20,8 @@ const PYRAMID_ROWS = 8; // 行8〜1 = 合計36マス
 const rooms = {};
 
 function generateCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ2345679';
   let c = '';
-  for (let i = 0; i < 4; i++) c += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 4; i++) c += Math.floor(Math.random() * 10);
   return c;
 }
 
@@ -56,10 +55,23 @@ function createPyramid() {
 
 function canPlace(pyramid, row, col, color) {
   if (pyramid[row][col] !== null) return false;
-  if (row === 0) return true; // 最下段は自由
+  if (row === 0) {
+    const rowLen = pyramid[0].length; // 8
+    const hasAny = pyramid[0].some(c => c !== null);
+    if (!hasAny) {
+      // 最初の1枚: 両端のどちらか
+      return col === 0 || col === rowLen - 1;
+    }
+    // 2枚目以降: 隣に既存カードがある場所のみ（隙間なし）
+    const leftAdj = col > 0 && pyramid[0][col - 1] !== null;
+    const rightAdj = col < rowLen - 1 && pyramid[0][col + 1] !== null;
+    return leftAdj || rightAdj;
+  }
   const below1 = pyramid[row - 1][col];
   const below2 = pyramid[row - 1][col + 1];
-  return (below1 && below1.color === color) || (below2 && below2.color === color);
+  // 下の2枚が両方埋まっていて、かつ少なくとも1枚が同じ色
+  if (!below1 || !below2) return false;
+  return below1.color === color || below2.color === color;
 }
 
 function getValidPlacements(pyramid, color) {
