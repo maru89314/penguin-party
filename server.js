@@ -221,6 +221,17 @@ io.on('connection', (socket) => {
     broadcastState(room);
   });
 
+  // 次のラウンドへ（スコアを引き継いでラウンドだけ進める）
+  socket.on('nextRound', () => {
+    const code = socket.roomCode;
+    const room = rooms[code];
+    if (!room) return;
+    if (room.hostId !== socket.id) return socket.emit('error', 'ホストのみ開始できます');
+    if (room.phase !== 'roundEnd') return;
+    startRound(room);
+    broadcastState(room);
+  });
+
   // カードを出す
   socket.on('playCard', ({ cardIndex, row, col }) => {
     const code = socket.roomCode;

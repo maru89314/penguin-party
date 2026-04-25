@@ -559,6 +559,9 @@ function showRoundEnd(state) {
   const sorted = [...state.players.map((p, i) => ({...p, i}))]
     .sort((a,b) => a.score - b.score);
 
+  const nextStarterIndex = state.round % state.players.length;
+  const nextStarterName = state.players[nextStarterIndex].name;
+
   document.getElementById('result-scores').innerHTML =
     `<p style="color:#888;font-size:.85rem;margin-bottom:12px">ペナルティ（手札が残った枚数）の合計が少ない人が勝ち！</p>` +
     sorted.map((p, rank) =>
@@ -567,13 +570,14 @@ function showRoundEnd(state) {
         <span>${p.score}点</span>
       </div>`
     ).join('') +
-    `<br><p style="color:#888;font-size:.85rem">ホストが次のラウンドを始めます...</p>`;
+    `<br><p style="color:#27ae60;font-size:.9rem;font-weight:600">🐧 次のラウンドの最初のプレイヤー: ${escHtml(nextStarterName)}</p>` +
+    `<p style="color:#888;font-size:.85rem">ホストが次のラウンドを始めます...</p>`;
 
   // ホストなら「次のラウンド」ボタンを表示
   const btn = document.querySelector('#result .btn-primary');
   if (isHost) {
     btn.textContent = '▶️ 次のラウンドへ';
-    btn.onclick = () => socket.emit('startGame');
+    btn.onclick = () => socket.emit('nextRound');
     btn.style.display = 'block';
   } else {
     btn.style.display = 'none';
